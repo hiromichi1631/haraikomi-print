@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>払込取扱票 印字ツール</title>
+<style>
+  :root { --blue:#2255aa; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Yu Gothic UI","Meiryo",sans-serif; background:#eef1f5; color:#222; }
+  #ui { padding:14px 18px; }
+  h1 { font-size:18px; margin:0 0 10px; }
+  .panes { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .pane { background:#fff; border:1px solid #ccd; border-radius:8px; padding:12px 14px; }
+  #inputPane { width:340px; }
+  label.row { display:block; margin:8px 0; font-size:13px; }
+  label.row input[type=text], label.row textarea {
+    width:100%; padding:4px 6px; font-size:14px; border:1px solid #aab; border-radius:4px; margin-top:2px;
+  }
+  textarea { resize:vertical; }
+  .chk { font-size:13px; display:block; margin:6px 0; }
+  .small { font-size:11px; color:#667; }
+  #err { color:#c00; font-size:12px; min-height:14px; }
+  button { padding:8px 16px; font-size:14px; border-radius:5px; border:1px solid #888; background:#f4f6fa; cursor:pointer; }
+  button.primary { background:var(--blue); color:#fff; border-color:var(--blue); font-weight:bold; }
+  details { margin-top:10px; }
+  summary { cursor:pointer; font-size:13px; font-weight:bold; }
+  table.adj { border-collapse:collapse; font-size:11px; margin-top:6px; }
+  table.adj th, table.adj td { border:1px solid #dde; padding:2px 4px; text-align:center; }
+  table.adj input { width:48px; font-size:11px; }
+  /* ---------- preview ---------- */
+  #previewPane { flex:1; min-width:400px; overflow:auto; }
+  #scaleWrap { transform-origin:top left; }
+  #sheet {
+    position:relative; width:180mm; height:114mm; background:#fff;
+    box-shadow:0 1px 6px rgba(0,0,0,.25); overflow:hidden;
+  }
+  #sheet .fld { position:absolute; white-space:pre-wrap; line-height:1.3; color:#000;
+    font-family:"MS Gothic","Yu Gothic",monospace; }
+  #sheet .cell { position:absolute; text-align:center; font-family:"MS Gothic",monospace; color:#000; }
+  #guideSvg { position:absolute; inset:0; width:100%; height:100%; }
+  /* ---------- print ---------- */
+  @media print {
+    body { background:#fff; }
+    #ui, #previewTitle, #zoomCtl { display:none !important; }
+    #previewPane { border:none; padding:0; margin:0; overflow:visible; }
+    #scaleWrap { transform:none !important; }
+    #sheet { box-shadow:none; overflow:visible; }
+    body:not(.print-guide) #guideSvg { display:none; }
+    body.mode-a4 #sheet { margin-left:var(--a4x,8mm); margin-top:var(--a4y,8mm); }
+  }
+</style>
+<style id="pageStyle">@page { size:180mm 114mm; margin:0; }</style>
+</head>
+<body>
+<div id="ui">
+  <h1>払込取扱票 印字ツール（金額・おところ・おなまえ）</h1>
+  <div class="panes">
+    <div class="pane" id="inputPane">
+      <label class="row">金額（円）
+        <input type="text" id="inAmount" placeholder="例: 12800" inputmode="numeric">
+      </label>
+      <div id="err"></div>
+      <label class="row">通信欄（注文番号・商品名など / 任意）
+        <textarea id="inMsg" rows="3" placeholder="例: 注文番号 12345&#10;肉球シール 2セット"></textarea>
+      </label>
+      <label class="row">郵便番号（〒の後に印字）
+        <input type="text" id="inZip" placeholder="例: 123-4567">
+      </label>
+      <label class="row">おところ（住所）
+        <textarea id="inAddr" rows="2" placeholder="例: 東京都新宿区○○ 1-2-3 ○○マンション101"></textarea>
+      </label>
+      <label class="row">おなまえ（氏名）
+        <input type="text" id="inName" placeholder="例: 山田 太郎">
+      </label>
+      <label class="row">ご連絡先電話番号（任意）
+        <input type="text" id="inTel" placeholder="例: 03-1234-5678">
+      </label>
+
+      <label class="chk"><input type="checkbox" id="optYen" checked> 金額の先頭に「¥」を付ける（改ざん防止）</label>
+      <label class="chk"><input type="checkbox" id="optR" checked> 右側（振替払込請求書兼受領証）にも金額・ご依頼人を印字</label>
+      <label class="chk"><input type="checkbox" id="optGuide"> 位置確認用の枠線も印刷する（普通紙での試し刷り用）</label>
+
+      <label class="chk">印刷方法:
+        <select id="optMode">
+          <option value="slip">用紙サイズで印刷（180×114mm カスタム用紙）</option>
+          <option value="a4">A4用紙の左上に配置（用紙をA4トレイ左端にセット）</option>
+        </select>
+      </label>
+      <span class="small" id="a4ofs" style="display:none">
+        A4左上からの位置: 横 <input type="number" id="optA4x" value="8" step="0.5" style="width:55px">mm
+        縦 <input type="number" id="optA4y" value="8" step="0.5" style="width:55px">mm
+      </span>
+
+      <details>
+        <summary>印字位置の微調整（mm）</summary>
+        <div class="small" style="margin:4px 0">全体ずらし:
+          横 <input type="number" id="optGx" value="0" step="0.5" style="width:55px">
+          縦 <input type="number" id="optGy" value="0" step="0.5" style="width:55px">
+        </div>
+        <table class="adj" id="adjTable"></table>
+        <button id="btnReset" style="margin-top:6px;font-size:12px">位置を初期値に戻す</button>
+      </details>
+
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="primary" id="btnPrint">印刷</button>
+        <button id="btnExport">設定を書き出す</button>
+        <button id="btnImport">設定を読み込む</button>
+        <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+      </div>
+      <p class="small" style="margin-top:6px">
+        別のパソコンで使うには: この <b>index.html を1つコピーするだけ</b>で動きます（USB・メール・OneDrive等）。
+        位置調整済みの設定も引き継ぐ場合は「設定を書き出す」で保存したJSONファイルを一緒に渡し、
+        移動先で「設定を読み込む」してください。
+      </p>
+      <p class="small" style="margin-top:10px">
+        使い方: ①まず「枠線も印刷」をONにして普通紙に試し刷りし、実物の用紙と透かして重ねて位置を確認
+        ②ズレがあれば「微調整」で補正（右へ＝横＋ / 下へ＝縦＋）
+        ③枠線をOFFに戻し、払込取扱票をプリンタにセットして本番印刷。<br>
+        印刷ダイアログでは <b>倍率100%（実際のサイズ）・余白なし</b> を必ず選択してください。
+        設定は自動保存されます。
+      </p>
+    </div>
+
+    <div class="pane" id="previewPane">
+      <div id="previewTitle" style="font-size:13px;font-weight:bold;margin-bottom:6px">プレビュー
+        <span id="zoomCtl" class="small" style="font-weight:normal">　表示倍率
+          <input type="range" id="zoom" min="50" max="150" value="100" style="vertical-align:middle">
+        </span>
+      </div>
+      <div id="scaleWrap"><div id="sheet"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const LS_KEY = 'haraikomi-print-v1';
+
+// 各フィールドの既定位置（mm）。x,y=左上、pitch=金額1マスの幅、w=折返し幅、size=文字サイズ、lh=行送り
+const DEFAULTS = {
+  amtL : { label:'金額（左・払込票）',        x:83.5, y:9.5,  pitch:4.3, size:4.2 },
+  msg  : { label:'通信欄',                    x:8,    y:34,   w:70,  size:3.2, lh:5   },
+  zip  : { label:'郵便番号',                  x:22,   y:49,   size:3.2 },
+  addr : { label:'おところ（住所）',          x:18,   y:55,   w:60,  size:3.2, lh:4.8 },
+  name : { label:'おなまえ（氏名）',          x:18,   y:67,   size:3.8 },
+  tel  : { label:'電話番号',                  x:30,   y:80,   size:3   },
+  amtR : { label:'金額（右・受領証）',        x:134,  y:44,   pitch:5.4, size:4.2 },
+  addrR: { label:'ご依頼人 住所（右）',       x:126,  y:54,   w:44,  size:2.6, lh:4   },
+  nameR: { label:'ご依頼人 氏名（右）',       x:126,  y:66,   size:3.2 },
+};
+const ADJ_KEYS = ['x','y','pitch','w','size','lh'];
+
+const DEF_OPT = { yen:true, printR:true, mode:'slip', a4x:8, a4y:8, gx:0, gy:0 };
+
+let cfg = loadCfg();
+function loadCfg(){
+  try {
+    const s = JSON.parse(localStorage.getItem(LS_KEY));
+    if (s && s.fields) return normalizeCfg(s);
+  } catch(e){}
+  return { fields: JSON.parse(JSON.stringify(DEFAULTS)), opt: { ...DEF_OPT } };
+}
+// 旧バージョンの設定や外部から読み込んだJSONを補完・検証する
+function normalizeCfg(s){
+  const fields = {};
+  for (const key in DEFAULTS){
+    fields[key] = { ...DEFAULTS[key] };
+    if (s.fields && s.fields[key]){
+      for (const k of ADJ_KEYS){
+        const v = parseFloat(s.fields[key][k]);
+        if (k in DEFAULTS[key] && !isNaN(v)) fields[key][k] = v;
+      }
+    }
+  }
+  return { fields, opt: { ...DEF_OPT, ...(s.opt || {}) } };
+}
+function saveCfg(){ localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }
+
+const $ = id => document.getElementById(id);
+const sheet = $('sheet');
+
+// ---- 微調整テーブル生成 ----
+function buildAdjTable(){
+  const t = $('adjTable');
+  let html = '<tr><th>項目</th><th>横x</th><th>縦y</th><th>マス幅</th><th>折返幅</th><th>文字</th><th>行送</th></tr>';
+  for (const key in DEFAULTS){
+    const f = cfg.fields[key];
+    html += `<tr><td style="text-align:left">${DEFAULTS[key].label}</td>`;
+    for (const k of ADJ_KEYS){
+      html += (k in DEFAULTS[key])
+        ? `<td><input type="number" step="0.2" data-f="${key}" data-k="${k}" value="${f[k]}"></td>`
+        : '<td>-</td>';
+    }
+    html += '</tr>';
+  }
+  t.innerHTML = html;
+  t.querySelectorAll('input').forEach(inp => inp.addEventListener('input', e => {
+    const v = parseFloat(e.target.value);
+    if (!isNaN(v)) { cfg.fields[e.target.dataset.f][e.target.dataset.k] = v; saveCfg(); render(); }
+  }));
+}
+
+// ---- 金額を8マスに右詰め配置 ----
+function amountCells(amountStr, withYen){
+  const ds = (amountStr || '').replace(/[^0-9]/g,'').replace(/^0+(?=\d)/,'');
+  const cells = new Array(8).fill('');
+  if (!ds) return { cells, error:'' };
+  const maxLen = withYen ? 7 : 8;
+  if (ds.length > maxLen) return { cells, error:`金額は最大${maxLen}桁（${withYen?'¥付きの場合':''}9,999万円未満）です` };
+  for (let i = 0; i < ds.length; i++) cells[8 - ds.length + i] = ds[i];
+  if (withYen) cells[8 - ds.length - 1] = '¥';
+  return { cells, error:'' };
+}
+
+// ---- オプションのUI⇔設定の同期 ----
+function syncOptFromUI(){
+  cfg.opt = {
+    yen: $('optYen').checked,
+    printR: $('optR').checked,
+    mode: $('optMode').value,
+    a4x: parseFloat($('optA4x').value) || 0,
+    a4y: parseFloat($('optA4y').value) || 0,
+    gx: parseFloat($('optGx').value) || 0,
+    gy: parseFloat($('optGy').value) || 0,
+  };
+  saveCfg();
+}
+function applyCfgToUI(){
+  const o = cfg.opt;
+  $('optYen').checked = o.yen;
+  $('optR').checked = o.printR;
+  $('optMode').value = o.mode;
+  $('optA4x').value = o.a4x;
+  $('optA4y').value = o.a4y;
+  $('optGx').value = o.gx;
+  $('optGy').value = o.gy;
+}
+
+// ---- 描画 ----
+function render(){
+  syncOptFromUI();
+  const gx = cfg.opt.gx;
+  const gy = cfg.opt.gy;
+  const F = cfg.fields;
+  const withYen = $('optYen').checked;
+  const printR = $('optR').checked;
+  const { cells, error } = amountCells($('inAmount').value, withYen);
+  $('err').textContent = error;
+
+  const zip  = $('inZip').value.trim();
+  const addr = $('inAddr').value;
+  const name = $('inName').value;
+  const tel  = $('inTel').value.trim();
+  const msg  = $('inMsg').value;
+
+  let html = '';
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const digitRow = (f) => cells.map((c,i) => c === '' ? '' :
+    `<span class="cell" style="left:${f.x + gx + i*f.pitch}mm;top:${f.y + gy}mm;width:${f.pitch}mm;font-size:${f.size}mm">${c}</span>`
+  ).join('');
+  const textFld = (f, txt) => !txt ? '' :
+    `<div class="fld" style="left:${f.x + gx}mm;top:${f.y + gy}mm;${f.w ? `width:${f.w}mm;` : ''}font-size:${f.size}mm;${f.lh ? `line-height:${f.lh}mm;` : ''}">${esc(txt)}</div>`;
+
+  html += digitRow(F.amtL);
+  html += textFld(F.msg,  msg);
+  html += textFld(F.zip,  zip ? '〒 ' + zip : '');
+  html += textFld(F.addr, addr);
+  html += textFld(F.name, name);
+  html += textFld(F.tel,  tel);
+  if (printR){
+    html += digitRow(F.amtR);
+    html += textFld(F.addrR, addr);
+    html += textFld(F.nameR, name);
+  }
+  html += buildGuide(gx, gy, printR);
+  sheet.innerHTML = html;
+}
+
+// ---- ガイド枠（画面では常時表示・印刷はチェック時のみ）----
+function buildGuide(gx, gy, printR){
+  const F = cfg.fields;
+  let g = '';
+  const c = '#9db5e0';
+  g += `<rect x="0.4" y="0.4" width="179.2" height="113.2" fill="none" stroke="${c}" stroke-width="0.3"/>`;
+  g += `<line x1="121" y1="0" x2="121" y2="114" stroke="${c}" stroke-width="0.25" stroke-dasharray="2,1.5"/>`;
+  g += `<text x="40" y="6" font-size="3.5" fill="${c}">払 込 取 扱 票</text>`;
+  g += `<text x="125" y="6" font-size="2.6" fill="${c}">振替払込請求書兼受領証</text>`;
+  const cellBoxes = (f) => {
+    let s = '';
+    for (let i = 0; i < 8; i++)
+      s += `<rect x="${f.x + gx + i*f.pitch}" y="${f.y + gy - 0.8}" width="${f.pitch}" height="${f.size + 1.8}" fill="none" stroke="${c}" stroke-width="0.2"/>`;
+    return s;
+  };
+  const underline = (f, w) =>
+    `<line x1="${f.x + gx}" y1="${f.y + gy + f.size + 0.8}" x2="${f.x + gx + w}" y2="${f.y + gy + f.size + 0.8}" stroke="${c}" stroke-width="0.2" stroke-dasharray="1,1"/>` +
+    `<text x="${f.x + gx}" y="${f.y + gy - 1}" font-size="2" fill="${c}">${DEFAULTS[Object.keys(F).find(k => F[k] === f)].label}</text>`;
+  g += cellBoxes(F.amtL);
+  g += underline(F.msg,  F.msg.w);
+  g += underline(F.zip,  25);
+  g += underline(F.addr, F.addr.w);
+  g += underline(F.name, 50);
+  g += underline(F.tel,  40);
+  if (printR){
+    g += cellBoxes(F.amtR);
+    g += underline(F.addrR, F.addrR.w);
+    g += underline(F.nameR, 40);
+  }
+  return `<svg id="guideSvg" viewBox="0 0 180 114" xmlns="http://www.w3.org/2000/svg">${g}</svg>`;
+}
+
+// ---- 印刷モード ----
+function applyMode(){
+  const a4 = $('optMode').value === 'a4';
+  $('a4ofs').style.display = a4 ? 'inline' : 'none';
+  $('pageStyle').textContent = a4 ? '@page { size:A4 portrait; margin:0; }' : '@page { size:180mm 114mm; margin:0; }';
+  document.body.classList.toggle('mode-a4', a4);
+  document.body.style.setProperty('--a4x', ($('optA4x').value || 8) + 'mm');
+  document.body.style.setProperty('--a4y', ($('optA4y').value || 8) + 'mm');
+}
+
+// ---- イベント ----
+['inAmount','inMsg','inZip','inAddr','inName','inTel','optYen','optR','optGx','optGy'].forEach(id =>
+  $(id).addEventListener('input', render));
+['optMode','optA4x','optA4y'].forEach(id => $(id).addEventListener('input', () => { applyMode(); render(); }));
+$('zoom').addEventListener('input', e => $('scaleWrap').style.transform = `scale(${e.target.value / 100})`);
+$('btnReset').addEventListener('click', () => {
+  cfg.fields = JSON.parse(JSON.stringify(DEFAULTS));
+  saveCfg(); buildAdjTable(); render();
+});
+$('btnPrint').addEventListener('click', () => {
+  document.body.classList.toggle('print-guide', $('optGuide').checked);
+  applyMode();
+  window.print();
+});
+
+// ---- 設定の書き出し / 読み込み（他のPCへの引き継ぎ用）----
+$('btnExport').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'haraikomi-settings.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+$('btnImport').addEventListener('click', () => $('importFile').click());
+$('importFile').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const s = JSON.parse(reader.result);
+      if (!s || !s.fields) throw new Error('形式が違います');
+      cfg = normalizeCfg(s);
+      saveCfg();
+      applyCfgToUI();
+      buildAdjTable();
+      applyMode();
+      render();
+      $('err').textContent = '';
+      alert('設定を読み込みました');
+    } catch(err) {
+      alert('設定ファイルを読み込めませんでした: ' + err.message);
+    }
+    e.target.value = '';
+  };
+  reader.readAsText(file);
+});
+
+buildAdjTable();
+applyCfgToUI();
+applyMode();
+render();
+</script>
+</body>
+</html>
