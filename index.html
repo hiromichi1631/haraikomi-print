@@ -30,23 +30,28 @@
   /* ---------- preview ---------- */
   #previewPane { flex:1; min-width:400px; overflow:auto; }
   #scaleWrap { transform-origin:top left; }
-  #sheet {
+  .sheet {
     position:relative; width:180mm; height:114mm; background:#fff;
-    box-shadow:0 1px 6px rgba(0,0,0,.25); overflow:hidden;
+    box-shadow:0 1px 6px rgba(0,0,0,.25); overflow:hidden; margin-bottom:14px;
   }
-  #sheet .fld { position:absolute; white-space:pre-wrap; line-height:1.3; color:#000;
+  .sheet .fld { position:absolute; white-space:pre-wrap; line-height:1.3; color:#000;
     font-family:"MS Gothic","Yu Gothic",monospace; }
-  #sheet .cell { position:absolute; text-align:center; font-family:"MS Gothic",monospace; color:#000; }
-  #guideSvg { position:absolute; inset:0; width:100%; height:100%; }
+  .sheet .cell { position:absolute; text-align:center; font-family:"MS Gothic",monospace; color:#000; }
+  .guideSvg { position:absolute; inset:0; width:100%; height:100%; }
+  .modeTabs { display:flex; gap:16px; font-size:13px; font-weight:bold;
+    padding:6px 8px; background:#eef2fa; border-radius:5px; margin-bottom:6px; }
+  .modeTabs label { cursor:pointer; }
+  #inBatch { width:100%; font-size:12px; font-family:"MS Gothic",monospace; }
   /* ---------- print ---------- */
   @media print {
     body { background:#fff; }
     #ui, #previewTitle, #zoomCtl { display:none !important; }
     #previewPane { border:none; padding:0; margin:0; overflow:visible; }
     #scaleWrap { transform:none !important; }
-    #sheet { box-shadow:none; overflow:visible; }
-    body:not(.print-guide) #guideSvg { display:none; }
-    body.mode-a4 #sheet { margin-left:var(--a4x,8mm); margin-top:var(--a4y,8mm); }
+    .sheet { box-shadow:none; overflow:visible; margin-bottom:0; break-after:page; page-break-after:always; }
+    .sheet:last-child { break-after:auto; page-break-after:auto; }
+    body:not(.print-guide) .guideSvg { display:none; }
+    body.mode-a4 .sheet { margin-left:var(--a4x,8mm); margin-top:var(--a4y,8mm); }
   }
 </style>
 <style id="pageStyle">@page { size:180mm 114mm; margin:0; }</style>
@@ -56,6 +61,11 @@
   <h1>払込取扱票 印字ツール（金額・おところ・おなまえ）</h1>
   <div class="panes">
     <div class="pane" id="inputPane">
+      <div class="modeTabs">
+        <label><input type="radio" name="inMode" value="single" checked> 1件ずつ入力</label>
+        <label><input type="radio" name="inMode" value="batch"> 一括入力（複数名を連続印刷）</label>
+      </div>
+      <div id="singlePane">
       <label class="row">金額（円）
         <input type="text" id="inAmount" placeholder="例: 12800" inputmode="numeric">
       </label>
@@ -75,6 +85,18 @@
       <label class="row">ご連絡先電話番号（任意）
         <input type="text" id="inTel" placeholder="例: 03-1234-5678">
       </label>
+      </div><!-- /singlePane -->
+
+      <div id="batchPane" style="display:none">
+        <p class="small" style="margin:4px 0">
+          Excelで <b>おなまえ／金額／郵便番号／おところ／電話番号／通信欄</b> の順に列を作り、
+          範囲をコピーして下に貼り付けてください（郵便番号以降は省略可）。
+          1行目に見出し（「おなまえ」「金額」など）があれば列の順番が違っても自動で認識します。
+          1行が用紙1枚になり、まとめて連続印刷されます。
+        </p>
+        <textarea id="inBatch" rows="10" placeholder="山田 太郎&#9;12800&#9;123-4567&#9;東京都新宿区○○1-2-3&#10;鈴木 花子&#9;9800&#9;456-7890&#9;大阪府大阪市○○4-5-6"></textarea>
+        <div id="batchInfo" class="small" style="min-height:14px"></div>
+      </div>
 
       <label class="chk"><input type="checkbox" id="optYen" checked> 金額の先頭に「¥」を付ける（改ざん防止）</label>
       <label class="chk"><input type="checkbox" id="optR" checked> 右側（振替払込請求書兼受領証）にも金額・ご依頼人を印字</label>
@@ -127,7 +149,7 @@
           <input type="range" id="zoom" min="50" max="150" value="100" style="vertical-align:middle">
         </span>
       </div>
-      <div id="scaleWrap"><div id="sheet"></div></div>
+      <div id="scaleWrap"><div id="sheets"></div></div>
     </div>
   </div>
 </div>
@@ -177,7 +199,7 @@ function normalizeCfg(s){
 function saveCfg(){ localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }
 
 const $ = id => document.getElementById(id);
-const sheet = $('sheet');
+const sheets = $('sheets');
 
 // ---- 微調整テーブル生成 ----
 function buildAdjTable(){
@@ -236,24 +258,45 @@ function applyCfgToUI(){
   $('optGy').value = o.gy;
 }
 
+// ---- 一括入力（Excel貼り付け = タブ区切り）の解析 ----
+const COL_ORDER = ['name','amount','zip','addr','tel','msg'];
+function headerKey(h){
+  if (/おなまえ|名前|氏名/.test(h)) return 'name';
+  if (/金額/.test(h)) return 'amount';
+  if (/郵便|〒/.test(h)) return 'zip';
+  if (/おところ|住所/.test(h)) return 'addr';
+  if (/電話/.test(h)) return 'tel';
+  if (/通信/.test(h)) return 'msg';
+  return null;
+}
+function parseBatch(text){
+  const lines = text.split(/\r?\n/);
+  const split = l => l.includes('\t') ? l.split('\t') : l.split(',');
+  let order = COL_ORDER, start = 0;
+  if (lines.length){
+    const map = split(lines[0]).map(c => headerKey(c.trim()));
+    if (map.includes('amount') && map.includes('name')) { order = map; start = 1; }
+  }
+  const recs = [];
+  for (let i = start; i < lines.length; i++){
+    if (!lines[i].trim()) continue;
+    const r = { amount:'', msg:'', zip:'', addr:'', name:'', tel:'', _line: i + 1 };
+    split(lines[i]).forEach((c, j) => { if (order[j]) r[order[j]] = c.trim(); });
+    if (r.amount || r.name) recs.push(r);
+  }
+  return recs;
+}
+
 // ---- 描画 ----
-function render(){
-  syncOptFromUI();
-  const gx = cfg.opt.gx;
-  const gy = cfg.opt.gy;
+function isBatchMode(){ return document.querySelector('input[name="inMode"]:checked').value === 'batch'; }
+
+function buildSheet(rec, errs){
+  const gx = cfg.opt.gx, gy = cfg.opt.gy;
   const F = cfg.fields;
-  const withYen = $('optYen').checked;
-  const printR = $('optR').checked;
-  const { cells, error } = amountCells($('inAmount').value, withYen);
-  $('err').textContent = error;
+  const printR = cfg.opt.printR;
+  const { cells, error } = amountCells(rec.amount, cfg.opt.yen);
+  if (error) errs.push((rec._line ? rec._line + '行目: ' : '') + error);
 
-  const zip  = $('inZip').value.trim();
-  const addr = $('inAddr').value;
-  const name = $('inName').value;
-  const tel  = $('inTel').value.trim();
-  const msg  = $('inMsg').value;
-
-  let html = '';
   const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
   const digitRow = (f) => cells.map((c,i) => c === '' ? '' :
     `<span class="cell" style="left:${f.x + gx + i*f.pitch}mm;top:${f.y + gy}mm;width:${f.pitch}mm;font-size:${f.size}mm">${c}</span>`
@@ -261,19 +304,42 @@ function render(){
   const textFld = (f, txt) => !txt ? '' :
     `<div class="fld" style="left:${f.x + gx}mm;top:${f.y + gy}mm;${f.w ? `width:${f.w}mm;` : ''}font-size:${f.size}mm;${f.lh ? `line-height:${f.lh}mm;` : ''}">${esc(txt)}</div>`;
 
+  let html = '';
   html += digitRow(F.amtL);
-  html += textFld(F.msg,  msg);
-  html += textFld(F.zip,  zip ? '〒 ' + zip : '');
-  html += textFld(F.addr, addr);
-  html += textFld(F.name, name);
-  html += textFld(F.tel,  tel);
+  html += textFld(F.msg,  rec.msg);
+  html += textFld(F.zip,  rec.zip ? '〒 ' + rec.zip : '');
+  html += textFld(F.addr, rec.addr);
+  html += textFld(F.name, rec.name);
+  html += textFld(F.tel,  rec.tel);
   if (printR){
     html += digitRow(F.amtR);
-    html += textFld(F.addrR, addr);
-    html += textFld(F.nameR, name);
+    html += textFld(F.addrR, rec.addr);
+    html += textFld(F.nameR, rec.name);
   }
   html += buildGuide(gx, gy, printR);
-  sheet.innerHTML = html;
+  return `<div class="sheet">${html}</div>`;
+}
+
+function render(){
+  syncOptFromUI();
+  const batch = isBatchMode();
+  $('singlePane').style.display = batch ? 'none' : '';
+  $('batchPane').style.display = batch ? '' : 'none';
+
+  const recs = batch ? parseBatch($('inBatch').value) : [{
+    amount: $('inAmount').value, msg: $('inMsg').value,
+    zip: $('inZip').value.trim(), addr: $('inAddr').value,
+    name: $('inName').value, tel: $('inTel').value.trim(),
+  }];
+  const errs = [];
+  sheets.innerHTML = recs.map(r => buildSheet(r, errs)).join('');
+  if (batch){
+    $('batchInfo').textContent = (recs.length ? `${recs.length}件 → 用紙${recs.length}枚を連続印刷します` : '')
+      + (errs.length ? '　⚠ ' + errs.join(' / ') : '');
+    $('err').textContent = '';
+  } else {
+    $('err').textContent = errs.join(' / ');
+  }
 }
 
 // ---- ガイド枠（画面では常時表示・印刷はチェック時のみ）----
@@ -305,7 +371,7 @@ function buildGuide(gx, gy, printR){
     g += underline(F.addrR, F.addrR.w);
     g += underline(F.nameR, 40);
   }
-  return `<svg id="guideSvg" viewBox="0 0 180 114" xmlns="http://www.w3.org/2000/svg">${g}</svg>`;
+  return `<svg class="guideSvg" viewBox="0 0 180 114" xmlns="http://www.w3.org/2000/svg">${g}</svg>`;
 }
 
 // ---- 印刷モード ----
@@ -319,8 +385,9 @@ function applyMode(){
 }
 
 // ---- イベント ----
-['inAmount','inMsg','inZip','inAddr','inName','inTel','optYen','optR','optGx','optGy'].forEach(id =>
+['inAmount','inMsg','inZip','inAddr','inName','inTel','inBatch','optYen','optR','optGx','optGy'].forEach(id =>
   $(id).addEventListener('input', render));
+document.querySelectorAll('input[name="inMode"]').forEach(r => r.addEventListener('change', render));
 ['optMode','optA4x','optA4y'].forEach(id => $(id).addEventListener('input', () => { applyMode(); render(); }));
 $('zoom').addEventListener('input', e => $('scaleWrap').style.transform = `scale(${e.target.value / 100})`);
 $('btnReset').addEventListener('click', () => {
