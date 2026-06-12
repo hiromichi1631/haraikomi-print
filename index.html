@@ -95,6 +95,7 @@
           範囲をコピーして下に貼り付けてください（郵便番号以降は省略可）。
           1行目に見出し（「おなまえ」「金額」など）があれば列の順番が違っても自動で認識します。
           1行が用紙1枚になり、まとめて連続印刷されます。
+          通信欄のセル内改行（Alt+Enter）はそのまま印字に反映されます（「\n」と書いても改行になります）。
         </p>
         <textarea id="inBatch" rows="10" placeholder="山田 太郎&#9;12800&#9;123-4567&#9;東京都新宿区○○1-2-3&#10;鈴木 花子&#9;9800&#9;456-7890&#9;大阪府大阪市○○4-5-6"></textarea>
         <div id="batchInfo" class="small" style="min-height:14px"></div>
@@ -271,19 +272,41 @@ function headerKey(h){
   if (/通信/.test(h)) return 'msg';
   return null;
 }
+// クォート付きTSV/CSVの解析。Excelでセル内改行（Alt+Enter）したセルは
+// "..." で囲まれて貼り付けられるため、引用符の中の改行はセルの一部として扱う
+function parseTable(text){
+  const delim = text.includes('\t') ? '\t' : ',';
+  const rows = [[]];
+  let cur = '', inQ = false;
+  for (let i = 0; i < text.length; i++){
+    const ch = text[i];
+    if (inQ){
+      if (ch === '"'){ if (text[i+1] === '"'){ cur += '"'; i++; } else { inQ = false; } }
+      else cur += ch;
+    } else if (ch === '"' && cur === ''){ inQ = true; }
+    else if (ch === delim){ rows[rows.length-1].push(cur); cur = ''; }
+    else if (ch === '\r' || ch === '\n'){
+      if (ch === '\r' && text[i+1] === '\n') i++;
+      rows[rows.length-1].push(cur); cur = '';
+      rows.push([]);
+    } else cur += ch;
+  }
+  rows[rows.length-1].push(cur);
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+
 function parseBatch(text){
-  const lines = text.split(/\r?\n/);
-  const split = l => l.includes('\t') ? l.split('\t') : l.split(',');
+  const rows = parseTable(text);
   let order = COL_ORDER, start = 0;
-  if (lines.length){
-    const map = split(lines[0]).map(c => headerKey(c.trim()));
+  if (rows.length){
+    const map = rows[0].map(c => headerKey(c.trim()));
     if (map.includes('amount') && map.includes('name')) { order = map; start = 1; }
   }
   const recs = [];
-  for (let i = start; i < lines.length; i++){
-    if (!lines[i].trim()) continue;
-    const r = { amount:'', msg:'', zip:'', addr:'', name:'', tel:'', _line: i + 1 };
-    split(lines[i]).forEach((c, j) => { if (order[j]) r[order[j]] = c.trim(); });
+  for (let i = start; i < rows.length; i++){
+    const r = { amount:'', msg:'', zip:'', addr:'', name:'', tel:'', _line: recs.length + 1 };
+    rows[i].forEach((c, j) => { if (order[j]) r[order[j]] = c.trim(); });
+    r.msg = r.msg.replace(/\\n/g, '\n'); // セルに「\n」と書いた場合も改行として扱う
     if (r.amount || r.name) recs.push(r);
   }
   return recs;
@@ -297,7 +320,7 @@ function buildSheet(rec, errs){
   const F = cfg.fields;
   const printR = cfg.opt.printR;
   const { cells, error } = amountCells(rec.amount, cfg.opt.yen);
-  if (error) errs.push((rec._line ? rec._line + '行目: ' : '') + error);
+  if (error) errs.push((rec._line ? rec._line + '件目: ' : '') + error);
 
   const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
   const digitRow = (f) => cells.map((c,i) => c === '' ? '' :
