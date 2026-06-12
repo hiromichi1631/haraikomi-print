@@ -307,6 +307,13 @@ function parseBatch(text){
     const r = { amount:'', msg:'', zip:'', addr:'', name:'', tel:'', _line: recs.length + 1 };
     rows[i].forEach((c, j) => { if (order[j]) r[order[j]] = c.trim(); });
     r.msg = r.msg.replace(/\\n/g, '\n'); // セルに「\n」と書いた場合も改行として扱う
+    // 金額・郵便番号・住所・電話のどれもない行は、セル内改行が引用符なしで
+    // 貼り付けられた断片とみなし、前の人の通信欄に改行として連結する
+    if (recs.length && !r.amount && !r.zip && !r.addr && !r.tel){
+      const cont = rows[i].map(c => c.trim()).filter(Boolean).join(' ');
+      if (cont){ const p = recs[recs.length - 1]; p.msg += (p.msg ? '\n' : '') + cont; }
+      continue;
+    }
     if (r.amount || r.name) recs.push(r);
   }
   return recs;
