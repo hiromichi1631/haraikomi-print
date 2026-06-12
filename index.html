@@ -158,11 +158,11 @@
 
 <script>
 'use strict';
-const LS_KEY = 'haraikomi-print-v3'; // 標準位置を変えたらバージョンを上げる（旧保存値による上書きを防ぐ）
+const LS_KEY = 'haraikomi-print-v4'; // 標準位置を変えたらバージョンを上げる（旧保存値による上書きを防ぐ）
 
 // 各フィールドの既定位置（mm）。x,y=左上、pitch=金額1マスの幅、w=折返し幅、size=文字サイズ、lh=行送り
 const DEFAULTS = {
-  amtL : { label:'金額（左・払込票）',        x:83.5, y:17.5, pitch:4.3, size:4.2 },
+  amtL : { label:'金額（左・払込票）',        x:67.5, y:17.5, pitch:6.3, size:4.2 },
   msg  : { label:'通信欄',                    x:13,   y:34,   w:70,  size:3.2, lh:5   },
   zip  : { label:'郵便番号',                  x:22,   y:49,   size:3.2 },
   addr : { label:'おところ（住所）',          x:18,   y:55,   w:60,  size:3.2, lh:4.8 },
