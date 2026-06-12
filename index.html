@@ -44,9 +44,11 @@
   #inBatch { width:100%; font-size:12px; font-family:"MS Gothic",monospace; }
   /* ---------- print ---------- */
   @media print {
-    body { background:#fff; }
-    #ui, #previewTitle, #zoomCtl { display:none !important; }
-    #previewPane { border:none; padding:0; margin:0; overflow:visible; }
+    body { background:#fff; margin:0; }
+    h1, #inputPane, #previewTitle, #zoomCtl { display:none !important; }
+    #ui { padding:0; }
+    .panes { display:block; }
+    #previewPane { background:none; border:none; border-radius:0; padding:0; margin:0; min-width:0; overflow:visible; }
     #scaleWrap { transform:none !important; }
     .sheet { box-shadow:none; overflow:visible; margin-bottom:0; break-after:page; page-break-after:always; }
     .sheet:last-child { break-after:auto; page-break-after:auto; }
@@ -433,6 +435,15 @@ $('importFile').addEventListener('change', e => {
   };
   reader.readAsText(file);
 });
+
+// ---- URLパラメータで入力欄を事前入力（例: ?amount=12800&name=山田太郎）----
+(() => {
+  const qp = new URLSearchParams(location.search);
+  const map = { amount:'inAmount', msg:'inMsg', zip:'inZip', addr:'inAddr', name:'inName', tel:'inTel', batch:'inBatch' };
+  for (const k in map) if (qp.has(k)) $(map[k]).value = qp.get(k);
+  if (qp.has('batch') || qp.get('mode') === 'batch')
+    document.querySelector('input[name="inMode"][value="batch"]').checked = true;
+})();
 
 buildAdjTable();
 applyCfgToUI();
